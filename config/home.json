@@ -1,0 +1,5 @@
+{
+  "_comment": "Placeholder front door in Buena Park. Put the real door in config/home.local.json (gitignored) or JEV_HOME=lat,lon.",
+  "lat": 41.95858,
+  "lon": -87.65232
+}
