@@ -43,6 +43,7 @@ LOCAL_HOME_PATH = ROOT / "config" / "home.local.json"
 class Area:
     bbox: tuple[float, float, float, float]  # (west, south, east, north)
     graph_file: str
+    time_cap_min: float = 150.0   # run cut-off; the spec's 2 h 30 min unless the area needs more
 
     @property
     def graph_path(self) -> Path:
@@ -57,7 +58,8 @@ AREAS = {
     "buena_park": Area((-87.6800, 41.9390, -87.6280, 41.9840), "buena_park_walk.graphml.gz"),
     # San Francisco, coast to bay, Fisherman's Wharf to the county line, so any
     # door in the city has the full 2-3 km of loop radius around it.
-    "sf": Area((-122.5160, 37.7070, -122.3550, 37.8120), "sf_walk.graphml.gz"),
+    # Hills make SF loops slower than Chicago ones, so its cut-off is 3 h.
+    "sf": Area((-122.5160, 37.7070, -122.3550, 37.8120), "sf_walk.graphml.gz", time_cap_min=180.0),
 }
 DEFAULT_AREA = "buena_park"
 DEFAULT_GRAPH_PATH = AREAS[DEFAULT_AREA].graph_path
@@ -331,7 +333,7 @@ def load_graph(path: Path | None = None, home: dict | None = None,
     _break_self_loops(G)
     G.graph["area"] = area
     home_cfg = home or load_home_config(area)
-    H = insert_home(G, home_cfg["lon"], home_cfg["lat"])
+    H = insert_home(G, home_cfg["lon"], home_cfg["lat"], home_cfg.get("street"))
     return G, H
 
 
@@ -392,18 +394,23 @@ def _split_index(coords, pt) -> int:
     return best_i
 
 
-def insert_home(G: nx.MultiGraph, lon: float, lat: float) -> Home:
+def insert_home(G: nx.MultiGraph, lon: float, lat: float, street: str | None = None) -> Home:
     """Split the nearest edge at the front door so the loop starts and ends exactly
     there. The door node is always a decision point (the arrive_home check lives
-    there) even though it has degree 2."""
+    there) even though it has degree 2. `street` restricts the snap to edges with
+    that name, for a door on a corner building."""
     proj = LocalProjection(lon, lat)
     px, py = proj.to_xy(lon, lat)
     best = None
     for u, v, k, d in G.edges(keys=True, data=True):
+        if street and street not in d["name"].split(" / "):
+            continue
         line = LineString([proj.to_xy(*c) for c in d["coords"]])
         dd = line.distance(Point(px, py))
         if best is None or dd < best[0]:
             best = (dd, u, v, k, d, line)
+    if best is None:
+        raise ValueError(f"no street named {street!r} in the graph")
     dist, u, v, k, d, line = best
     along = line.project(Point(px, py))
     snapped = line.interpolate(along)

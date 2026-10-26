@@ -1,5 +1,14 @@
 {
-  "_comment": "Placeholder front doors, mid-block on public streets. Put real ones in config/home.local.json (gitignored, same shape) or set JEV_HOME=lat,lon.",
-  "buena_park": {"lat": 41.95858, "lon": -87.65232, "where": "W Buena Ave between Broadway and Hazel"},
-  "sf": {"lat": 37.75870, "lon": -122.41700, "where": "20th St in the Mission"}
+  "_comment": "Front doors per area. buena_park is a placeholder mid-block on a public street. config/home.local.json (gitignored, same shape) or JEV_HOME=lat,lon override these.",
+  "buena_park": {
+    "lat": 41.95858,
+    "lon": -87.65232,
+    "where": "W Buena Ave between Broadway and Hazel"
+  },
+  "sf": {
+    "lat": 37.78773,
+    "lon": -122.4084,
+    "street": "Powell St",
+    "where": "335 Powell St (Westin St. Francis), Powell St entrance between Geary and Post"
+  }
 }

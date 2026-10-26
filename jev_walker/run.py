@@ -38,6 +38,14 @@ class RunConfig:
     def cap_m(self) -> float:
         return self.target_m * self.cap_ratio
 
+    @classmethod
+    def for_area(cls, area: str, **overrides) -> "RunConfig":
+        from .graph import AREAS
+
+        overrides = {k: v for k, v in overrides.items() if v is not None}
+        overrides.setdefault("time_cap_min", AREAS[area].time_cap_min)
+        return cls(**overrides)
+
 
 @dataclass
 class RunState:

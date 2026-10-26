@@ -74,8 +74,8 @@ def main(argv=None) -> int:
                     help="offer arrive_home within this many metres of the door")
     ap.add_argument("--walk-speed", type=float, default=RunConfig.walk_speed_mps,
                     help="metres per second for the simulated clock (SF hills: try 1.2)")
-    ap.add_argument("--time-cap", type=float, default=RunConfig.time_cap_min,
-                    help="minutes before the run is cut off (spec: 150)")
+    ap.add_argument("--time-cap", type=float, default=None,
+                    help="minutes before the run is cut off (default: the area's, 150 or 180 for SF)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--keep-logs", type=int, default=10, help="full logs to keep for the renderer")
     ap.add_argument("--out", type=Path, default=None)
@@ -83,8 +83,8 @@ def main(argv=None) -> int:
 
     G, home = load_graph(paths=args.paths, area=args.area)
     dist_home = dist_to_home(G, home)
-    cfg = RunConfig(mode=args.mode, arrive_home_radius_m=args.arrive_radius,
-                    walk_speed_mps=args.walk_speed, time_cap_min=args.time_cap)
+    cfg = RunConfig.for_area(args.area, mode=args.mode, arrive_home_radius_m=args.arrive_radius,
+                             walk_speed_mps=args.walk_speed, time_cap_min=args.time_cap)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out = args.out or ROOT / "runs" / f"{stamp}-{args.area}-{args.chooser}-{args.mode}"
     out.mkdir(parents=True, exist_ok=True)
