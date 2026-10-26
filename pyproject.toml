@@ -11,10 +11,14 @@ dependencies = [
 
 [project.optional-dependencies]
 claude = ["anthropic>=0.75"]
-dev = ["pytest>=8"]
+server = ["fastapi>=0.110", "uvicorn>=0.29"]
+dev = ["pytest>=8", "httpx>=0.27", "fastapi>=0.110"]
 
 [tool.setuptools]
 packages = ["jev_walker"]
+
+[tool.setuptools.package-data]
+jev_walker = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -3,10 +3,14 @@
 Harness for the sidewalk-scale cannonball run: Jev picks an exit at every corner of a
 five-mile loop from the front door, seeing only the current corner plus a compass home.
 
-This covers build-plan steps 2 and 3 (graph + menu builder, simulator, scoring, JSON
-log) for two areas, Buena Park and San Francisco, plus the chooser adapters for step 5,
-including a Jev adapter written against TypeSafe's published API. Still to build: the
-replay renderer, the phone page and its backend, and analysis.
+Built so far:
+- Build-plan steps 2 and 3 (graph + menu builder, simulator, scoring, JSON log) for
+  two areas, Buena Park and San Francisco.
+- The chooser adapters for step 5, including a Jev adapter written against TypeSafe's
+  published API.
+- Step 6: the phone page and its backend.
+
+Still to build: the replay renderer and analysis.
 
 ## Layout
 
@@ -18,8 +22,12 @@ replay renderer, the phone page and its backend, and analysis.
 | `jev_walker/choosers.py` | `random`, `heuristic`, `claude`, `jev` |
 | `jev_walker/scoring.py` | Per-run scoring table |
 | `jev_walker/sim.py` | Run N loops, aggregate, keep a few full logs |
+| `jev_walker/live.py` | `LiveWalk`: a real walk, the same `Run` driven by GPS fixes and the real clock (corner detection, overrides, crash resume) |
+| `jev_walker/server.py` | FastAPI backend: serves the phone page and a small JSON API over `LiveWalk` |
+| `jev_walker/static/` | The phone page (one HTML file, no build step), PWA manifest, service worker, icons |
+| `tools/phone_rehearsal.js` | Drives the phone page in an emulated Pixel with fake GPS, for a desk rehearsal |
 | `data/<area>_walk.graphml.gz` | Cached street graphs, `buena_park` and `sf` (no map calls on the walk) |
-| `config/home.json` | Placeholder doors per area (W Buena Ave; 20th St in the Mission). Put real ones in `config/home.local.json` (gitignored, same shape) or set `JEV_HOME=lat,lon` |
+| `config/home.json` | Front doors per area: SF is 335 Powell St (the Westin St. Francis entrance on Powell); Buena Park is a placeholder. `config/home.local.json` (gitignored, same shape) or `JEV_HOME=lat,lon` override them |
 
 ## Running
 
@@ -35,7 +43,7 @@ python -m jev_walker.sim --chooser jev --runs 1000       # needs TYPESAFE_API_KE
 
 # San Francisco
 python -m jev_walker.sim --area sf --chooser heuristic --runs 1000
-python -m jev_walker.sim --area sf --chooser heuristic --runs 1000 --walk-speed 1.1 --time-cap 180
+python -m jev_walker.sim --area sf --chooser heuristic --runs 1000 --walk-speed 1.1
 
 # Rebuild a graph cache (Buena Park ~2 min, SF ~5 min; overpass-api.de is often saturated)
 OVERPASS_URL=https://maps.mail.ru/osm/tools/overpass/api python -m jev_walker.graph --area sf
@@ -43,6 +51,51 @@ OVERPASS_URL=https://maps.mail.ru/osm/tools/overpass/api python -m jev_walker.gr
 
 The sim writes `runs/<stamp>-<area>-<chooser>-<mode>/` with `summary.json`, a
 `runs.jsonl` score line per run, and the first `--keep-logs` full logs for the renderer.
+
+## Walk day: the phone and the backend
+
+```sh
+pip install -e '.[server]'
+export TYPESAFE_API_KEY=...           # or OPENROUTER_API_KEY
+python -m jev_walker.server --area sf --chooser jev --port 8000 --token <secret>
+cloudflared tunnel --url http://localhost:8000     # prints https://<random>.trycloudflare.com
+```
+
+Open `https://<tunnel>/?t=<secret>` in Chrome on the Android phone, then use Add to
+Home screen.
+- The phone talks to the backend over LTE, so the backend needs a public HTTPS URL.
+  The Geolocation API needs HTTPS too. A laptop left awake on hotel wifi plus a quick
+  tunnel is enough; a small VPS works the same way.
+- `--chooser heuristic` runs the whole flow without a Jev key, for the field test.
+
+**What happens**
+1. Tap **Start** at the door. The page keeps the screen awake, averages GPS for 10 s,
+   and the backend asks Jev for the first corner, using absolute directions.
+2. Tap **Clap** on the three-count. That sets the sync marker for the footage.
+3. The screen shows the arrow, street, probability and a bar per option. Mid-block it
+   shrinks to miles, the compass home, and the distance to the next corner.
+4. Arrival is detected on the server: two consecutive fixes within 15 m of the corner
+   being walked to, with accuracy of 30 m or better, and not in the first 5 s after a
+   decision. The screen flashes and buzzes, and the next decision is already on it.
+   **I'm here** forces an arrival (taps within 3 s of a decision are ignored as double
+   taps).
+5. **Can't** asks which exit you actually took and why (no legal crossing, sidewalk
+   closed, exit missing, other). It's logged as an override and the run continues from
+   that exit.
+6. If Jev fails twice in a row, the screen shows **Ask again**. The run is not lost.
+7. The walk ends on `arrive_home`, at 6.5 mi, at the area's time cap (SF: 3 h), or on
+   **End**. The results screen links to the log.
+
+**Logs and crashes**
+- Every event rewrites `runs/live/<run_id>.json`: decisions with real timestamps,
+  every GPS fix with its nearest corner, UI events, overrides, the phone-to-server clock
+  offset, and the sync marker.
+- If the backend dies mid-walk, restart it with `--resume latest`. It replays the log
+  against the graph and carries on, and the page picks the walk back up on reload.
+
+**Desk rehearsal:** `node tools/phone_rehearsal.js <dir>` walks an emulated phone through
+a dozen corners against a local server, including one Can't and one I'm here, and
+saves screenshots.
 
 ## The contract as built
 
@@ -152,9 +205,13 @@ block.
 - SF has more decisions per loop than Buena Park (55–85 vs about 55).
 - **Hills are not modelled.** Neither the state nor the sim knows elevation. At
   1.34 m/s loops take 104–120 simulated minutes. At 1.1 m/s, roughly an SF hill pace,
-  they take 125–144 minutes, and the 150-minute cap ends some runs before they get home
-  (Bernal 14 of 50, Inner Richmond 25 of 50, Russian Hill 5 of 50). `--time-cap`
-  makes that rule easy to change.
+  they take 125–144 minutes, which is why SF's time cap is 3 h instead of the spec's
+  2 h 30 min. Under the old cap, some runs ended before home (Bernal 14 of 50, Inner
+  Richmond 25 of 50, Russian Hill 5 of 50).
+- **From the real door (335 Powell St), 200 runs per turning side:** the compass
+  heuristic closes 100% of loops. It finishes clean 70% of the time turning one way
+  and 0% the other. Loops take 108–116 min at 1.34 m/s, and at most 151 min at 1.0 m/s,
+  within the 3 h cap. A random walker closes 26%, never clean.
 
 ## Chooser notes
 

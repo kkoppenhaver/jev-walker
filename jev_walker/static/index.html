@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<title>Jev Walk</title>
+<style>
+  :root {
+    --bg: #000; --fg: #fff; --dim: #8a8a8a; --line: #2a2a2a;
+    --accent: #ffd400; --warn: #ff8a00; --bad: #ff3b30; --ok: #34c759;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--fg); }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-weight: 700; overflow: hidden; touch-action: manipulation;
+    -webkit-user-select: none; user-select: none;
+    padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+    display: flex; flex-direction: column;
+  }
+  button {
+    font: inherit; color: var(--fg); background: #1c1c1c; border: 2px solid #444;
+    border-radius: 14px; padding: 14px 10px; font-size: 5vw;
+  }
+  button:active { background: #333; }
+  .hidden { display: none !important; }
+
+  /* top bar */
+  #top { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 4vw; color: var(--dim); }
+  #top .grow { flex: 1; }
+  #gpsdot { width: 14px; height: 14px; border-radius: 50%; background: var(--bad); display: inline-block; }
+  #top button { font-size: 3.6vw; padding: 6px 12px; border-radius: 10px; }
+  #net { color: var(--bad); }
+
+  /* decision */
+  #decision { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; text-align: center; transition: all .3s; }
+  #arrowWrap { --a: 32vh; height: var(--a); width: var(--a); max-width: 80vw; max-height: 80vw; display: flex; align-items: center; justify-content: center; }
+  #arrow { width: 100%; height: 100%; transition: transform .35s ease-out; }
+  #arrowWord { font-size: 15vw; color: var(--accent); letter-spacing: .02em; line-height: 1; }
+  #street { font-size: 8vw; line-height: 1.1; margin-top: 1vh; min-height: 1.1em; word-break: break-word; }
+  #dirline { font-size: 5vw; color: var(--dim); margin-top: .5vh; }
+  #prob { display: flex; align-items: baseline; justify-content: center; gap: 12px; margin-top: 1.5vh; }
+  #pbig { font-size: 19vw; line-height: 1; color: var(--accent); font-variant-numeric: tabular-nums; }
+  #pconf { font-size: 4.2vw; color: var(--dim); text-align: left; }
+  #bars { width: 100%; margin-top: 1.2vh; display: flex; flex-direction: column; gap: 6px; }
+  .bar { display: grid; grid-template-columns: 1fr 15vw; align-items: center; gap: 8px; font-size: 4vw; }
+  .bar .lbl { position: relative; height: min(7.5vw, 4.4vh); border-radius: 8px; background: #151515; overflow: hidden; }
+  .bar .fill { position: absolute; inset: 0 auto 0 0; background: #4a4a4a; }
+  .bar .txt { position: absolute; left: 10px; right: 8px; top: 50%; transform: translateY(-50%);
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+  .bar .pc { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar .txt { text-shadow: 0 0 3px #000, 0 0 3px #000, 0 0 2px #000; }
+  .bar.chosen .lbl { box-shadow: inset 0 0 0 3px var(--accent); }
+  .bar.chosen .fill { background: #b89900; }
+  .bar.taken .lbl { box-shadow: inset 0 0 0 3px var(--warn); }
+  .bar.taken .fill { background: #b36200; }
+  .bar .walked { color: var(--bad); }
+
+  /* mid-block: the decision shrinks, the HUD grows */
+  body.midblock #arrowWrap { height: 12vh; width: 12vh; }
+  body.midblock #arrowWord { font-size: 8vw; }
+  body.midblock #street { font-size: 6vw; }
+  body.midblock #prob, body.midblock #bars, body.midblock #dirline { display: none; }
+  #walkline { font-size: 5vw; color: var(--dim); margin-top: .6vh; }
+
+  /* hud */
+  #hud { margin-top: auto; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 1vh 0; border-top: 2px solid var(--line); }
+  #miles { font-size: 10vw; font-variant-numeric: tabular-nums; line-height: 1; }
+  #miles small { font-size: 5vw; color: var(--dim); }
+  #sub { font-size: 4.2vw; color: var(--dim); margin-top: .6vh; font-variant-numeric: tabular-nums; }
+  #compass { display: flex; flex-direction: column; align-items: center; }
+  #needle { width: 22vw; height: 22vw; transition: transform .4s ease-out; }
+  #homeDist { font-size: 4.6vw; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  body.midblock #miles { font-size: 17vw; }
+  body.midblock #needle { width: 42vw; height: 42vw; }
+  body.midblock #homeDist { font-size: 7vw; }
+  body.midblock #hud { margin-top: auto; margin-bottom: auto; border-top: none; }
+
+  /* buttons */
+  #actions { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; padding: 1vh 0 1.4vh; }
+  #here { background: #10351a; border-color: var(--ok); font-size: 6vw; padding: 18px 10px; }
+  #cant { background: #3a1410; border-color: var(--bad); font-size: 6vw; }
+
+  /* idle + ended + error panels */
+  .panel { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 18px; text-align: center; }
+  .panel h1 { font-size: 9vw; line-height: 1.1; }
+  .panel p { font-size: 4.5vw; color: var(--dim); font-weight: 600; }
+  #startBtn { font-size: 9vw; padding: 28px; background: #10351a; border-color: var(--ok); }
+  .seg { display: flex; gap: 10px; justify-content: center; }
+  .seg button.on { border-color: var(--accent); color: var(--accent); }
+  #score { font-size: 5vw; text-align: left; margin: 0 auto; line-height: 1.6; font-variant-numeric: tabular-nums; }
+  #errorBox { background: #3a1410; border: 2px solid var(--bad); border-radius: 14px; padding: 14px; font-size: 4.5vw; margin: 8px 0; }
+
+  /* sheet */
+  #sheet { position: fixed; inset: 0; background: rgba(0,0,0,.92); display: flex; flex-direction: column; justify-content: flex-end; padding: 16px; gap: 10px; z-index: 5; }
+  #sheet h2 { font-size: 6vw; }
+  #sheet .list { display: flex; flex-direction: column; gap: 8px; }
+  #sheet .list button { text-align: left; }
+  #sheet .list button.sel { border-color: var(--warn); color: var(--warn); }
+
+  /* arrival flash */
+  #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 9; }
+  #flash.go { animation: flash .7s ease-out; }
+  @keyframes flash { 0% { opacity: 1; } 100% { opacity: 0; } }
+</style>
+</head>
+<body>
+<div id="top">
+  <span id="gpsdot"></span><span id="gpstxt">GPS…</span>
+  <span id="net" class="hidden">offline</span>
+  <span class="grow"></span>
+  <span id="elapsed">0:00</span>
+  <button id="clapBtn" class="hidden">Clap</button>
+  <button id="endBtn" class="hidden">End</button>
+</div>
+
+<!-- idle -->
+<div id="idle" class="panel">
+  <h1>Jev Walks<br>Me Home</h1>
+  <p id="idleInfo">Stand at the front door.</p>
+  <div class="seg"><button data-mode="compass" class="on">Compass</button><button data-mode="pure">Pure</button></div>
+  <button id="startBtn">Start</button>
+  <p id="startNote"></p>
+</div>
+
+<!-- walking -->
+<div id="walking" class="hidden" style="flex:1; display:flex; flex-direction:column;">
+  <div id="errorBox" class="hidden"><div id="errorTxt"></div><button id="retryBtn" style="margin-top:10px;width:100%">Ask again</button></div>
+  <div id="decision">
+    <div id="arrowWrap">
+      <svg id="arrow" viewBox="-50 -50 100 100" aria-hidden="true">
+        <path d="M0,-44 L30,-8 L12,-8 L12,42 L-12,42 L-12,-8 L-30,-8 Z" fill="#ffd400"/>
+      </svg>
+      <div id="arrowWord" class="hidden"></div>
+    </div>
+    <div id="street"></div>
+    <div id="dirline"></div>
+    <div id="walkline" class="hidden"></div>
+    <div id="prob"><div id="pbig">–</div><div id="pconf"></div></div>
+    <div id="bars"></div>
+  </div>
+  <div id="hud">
+    <div>
+      <div id="miles">0.00 <small>/ 5.0 mi</small></div>
+      <div id="sub"></div>
+    </div>
+    <div id="compass">
+      <svg id="needle" viewBox="-50 -50 100 100" aria-hidden="true">
+        <circle r="46" fill="none" stroke="#444" stroke-width="4"/>
+        <path d="M0,-40 L12,6 L0,0 L-12,6 Z" fill="#ff3b30"/>
+        <path d="M0,40 L12,6 L0,0 L-12,6 Z" fill="#666"/>
+        <text id="needleN" x="0" y="-30" text-anchor="middle" font-size="14" fill="#8a8a8a" class="hidden">N</text>
+      </svg>
+      <div id="homeDist">home</div>
+    </div>
+  </div>
+  <div id="actions">
+    <button id="here">I’m here</button>
+    <button id="cant">Can’t</button>
+  </div>
+</div>
+
+<!-- ended -->
+<div id="ended" class="panel hidden">
+  <h1 id="endTitle">Done</h1>
+  <div id="score"></div>
+  <a id="logLink" href="#" style="color:var(--accent);font-size:5vw">Download the run log</a>
+  <button id="newBtn">New walk</button>
+</div>
+
+<div id="sheet" class="hidden">
+  <h2 id="sheetTitle">Which way did you actually go?</h2>
+  <div class="list" id="sheetList"></div>
+  <button id="sheetCancel">Cancel</button>
+</div>
+<div id="flash"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const TOKEN = (() => {
+  const t = params.get("t");
+  try { if (t) localStorage.setItem("walkToken", t); return t || localStorage.getItem("walkToken") || ""; }
+  catch { return t || ""; }
+})();
+const AVG_S = Number(params.get("avg") || 10);     // start-fix averaging window
+const REASONS = { no_legal_crossing: "No legal crossing", sidewalk_closed: "Sidewalk closed",
+                  exit_missing: "That exit isn't there", other: "Other" };
+
+let view = null, viewAt = 0, lastDecisionI = -1, decisionAt = 0;
+let mode = "compass";
+let fixQueue = [], inflight = false, lastFix = null, watchId = null;
+let wakeLock = null, deviceHeading = null, startedAt = 0;
+
+// ------------------------------------------------------------------ api
+async function api(path, body) {
+  const opts = { headers: { "X-Walk-Token": TOKEN } };
+  if (body !== undefined) {
+    opts.method = "POST";
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify({ client_t: Date.now(), ...body });
+  }
+  const r = await fetch(path, opts);
+  if (r.status === 401) throw new Error("Wrong or missing token: open the link with ?t=…");
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+  return data;
+}
+
+async function call(path, body) {
+  try {
+    const v = await api(path, body);
+    $("net").classList.add("hidden");
+    render(v);
+    return v;
+  } catch (e) {
+    if (e instanceof TypeError) $("net").classList.remove("hidden");  // network down
+    else alert(e.message);
+    return null;
+  }
+}
+
+// ------------------------------------------------------------------ gps
+function startGps() {
+  if (watchId !== null || !navigator.geolocation) return;
+  watchId = navigator.geolocation.watchPosition(onFix, onGpsError,
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+}
+function onFix(pos) {
+  const c = pos.coords;
+  lastFix = { lat: c.latitude, lon: c.longitude, accuracy: c.accuracy,
+              heading: Number.isFinite(c.heading) ? c.heading : null,
+              speed: Number.isFinite(c.speed) ? c.speed : null, t: pos.timestamp };
+  showGps(c.accuracy);
+  if (view && view.phase !== "idle" && view.phase !== "ended") {
+    fixQueue.push(lastFix);
+    if (fixQueue.length > 600) fixQueue = fixQueue.slice(-600);
+    flushFixes();
+  }
+}
+function onGpsError(err) { $("gpstxt").textContent = "GPS: " + err.message; $("gpsdot").style.background = "var(--bad)"; }
+function showGps(acc) {
+  $("gpstxt").textContent = `±${Math.round(acc)} m`;
+  $("gpsdot").style.background = acc <= 15 ? "var(--ok)" : acc <= 30 ? "var(--accent)" : "var(--bad)";
+}
+async function flushFixes() {
+  if (inflight || !fixQueue.length) return;
+  inflight = true;
+  const batch = fixQueue.splice(0, fixQueue.length);
+  try {
+    const v = await api("/api/gps", { fixes: batch });
+    $("net").classList.add("hidden");
+    render(v);
+  } catch (e) {
+    fixQueue = batch.concat(fixQueue);          // keep them for the next try
+    $("net").classList.remove("hidden");
+  } finally {
+    inflight = false;
+    if (fixQueue.length) setTimeout(flushFixes, 1000);
+  }
+}
+
+// ------------------------------------------------------------------ screen awake, compass
+async function keepAwake() {
+  try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); }
+  catch (e) { console.warn("wake lock", e); }
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && view && view.phase !== "idle" && view.phase !== "ended") keepAwake();
+});
+window.addEventListener("deviceorientationabsolute", (e) => {
+  if (e.alpha !== null) deviceHeading = (360 - e.alpha) % 360;
+}, true);
+
+// ------------------------------------------------------------------ actions
+document.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => {
+  mode = b.dataset.mode;
+  document.querySelectorAll(".seg button").forEach((x) => x.classList.toggle("on", x === b));
+}));
+
+$("startBtn").addEventListener("click", async () => {
+  $("startBtn").disabled = true;
+  await keepAwake();
+  startGps();
+  const fixes = [];
+  const t0 = Date.now();
+  await new Promise((resolve) => {
+    const tick = setInterval(() => {
+      const left = Math.max(0, AVG_S - (Date.now() - t0) / 1000);
+      $("startNote").textContent = `Hold still… ${left.toFixed(0)} s`;
+      if (lastFix && (!fixes.length || fixes[fixes.length - 1] !== lastFix)) fixes.push(lastFix);
+      if (left <= 0) { clearInterval(tick); resolve(); }
+    }, 250);
+  });
+  let fix = null;
+  if (fixes.length) {   // accuracy-weighted average of the window
+    let w = 0, lat = 0, lon = 0;
+    for (const f of fixes) { const k = 1 / Math.max(1, f.accuracy) ** 2; w += k; lat += f.lat * k; lon += f.lon * k; }
+    fix = { lat: lat / w, lon: lon / w, accuracy: Math.min(...fixes.map((f) => f.accuracy)), t: Date.now() };
+  }
+  $("startNote").textContent = fix ? "" : "No GPS fix yet; starting anyway.";
+  startedAt = Date.now();
+  await call("/api/start", { fix, mode });
+  $("startBtn").disabled = false;
+});
+
+$("here").addEventListener("click", () => call("/api/arrive", {}));
+$("retryBtn").addEventListener("click", () => call("/api/retry", {}));
+$("clapBtn").addEventListener("click", async () => { await call("/api/sync", {}); $("clapBtn").textContent = "Clap ✓"; });
+$("endBtn").addEventListener("click", () => { if (confirm("End the walk now?")) call("/api/end", { reason: "manual" }); });
+$("newBtn").addEventListener("click", () => { view = null; lastDecisionI = -1; showPanel("idle"); });
+$("cant").addEventListener("click", openSheet);
+$("sheetCancel").addEventListener("click", () => $("sheet").classList.add("hidden"));
+
+function openSheet() {
+  if (!view || !view.decision) return;
+  const list = $("sheetList");
+  list.innerHTML = "";
+  $("sheetTitle").textContent = "Which way did you actually go?";
+  for (const o of view.decision.options) {
+    if (o.kind !== "exit") continue;
+    const b = document.createElement("button");
+    b.textContent = `${o.direction} · ${o.street || "path"}` + (o.chosen ? "  (Jev's pick)" : "");
+    b.addEventListener("click", () => pickReason(o));
+    list.appendChild(b);
+  }
+  $("sheet").classList.remove("hidden");
+}
+function pickReason(opt) {
+  const list = $("sheetList");
+  list.innerHTML = "";
+  $("sheetTitle").textContent = `Taking ${opt.direction} · ${opt.street || "path"}. Why?`;
+  for (const [key, label] of Object.entries(REASONS)) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.addEventListener("click", async () => {
+      $("sheet").classList.add("hidden");
+      await call("/api/override", { option_id: opt.id, reason: key });
+    });
+    list.appendChild(b);
+  }
+}
+
+// ------------------------------------------------------------------ render
+function showPanel(name) {
+  for (const p of ["idle", "walking", "ended"]) $(p).classList.toggle("hidden", p !== name);
+  $("endBtn").classList.toggle("hidden", name !== "walking");
+}
+
+function fmtTime(s) {
+  s = Math.max(0, Math.floor(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+const pct = (p) => `${Math.round(p * 100)}%`;
+const MILE = 1609.344;
+
+function render(v) {
+  view = v; viewAt = Date.now();
+  if (v.phase === "idle") { showPanel("idle"); return; }
+  if (v.phase === "ended") { renderEnded(v); return; }
+  showPanel("walking");
+  $("clapBtn").classList.toggle("hidden", !(v.hud && v.hud.calls <= 3));
+  startGps();
+
+  $("errorBox").classList.toggle("hidden", v.phase !== "chooser_error");
+  if (v.phase === "chooser_error") $("errorTxt").textContent = "Jev didn't answer: " + (v.error || "");
+
+  const d = v.decision;
+  if (d) {
+    if (d.i !== lastDecisionI) {
+      if (lastDecisionI !== -1 || d.i === 0) arrivalFlash();
+      lastDecisionI = d.i; decisionAt = Date.now();
+    }
+    renderDecision(d);
+  }
+  renderWalk(v);
+  renderHud(v);
+}
+
+function renderDecision(d) {
+  const arrow = $("arrow"), word = $("arrowWord");
+  if (d.kind === "arrive_home") {
+    arrow.classList.add("hidden"); word.classList.remove("hidden"); word.textContent = "HOME";
+  } else if (d.first_corner) {
+    // Absolute direction: point it with the phone's compass if it has one.
+    word.textContent = d.direction.toUpperCase();
+    if (deviceHeading !== null) {
+      word.classList.add("hidden"); arrow.classList.remove("hidden");
+      arrow.style.transform = `rotate(${d.angle_deg - deviceHeading}deg)`;
+    } else { arrow.classList.add("hidden"); word.classList.remove("hidden"); }
+  } else {
+    word.classList.add("hidden"); arrow.classList.remove("hidden");
+    arrow.style.transform = `rotate(${d.angle_deg}deg)`;
+  }
+  $("street").textContent = d.kind === "arrive_home" ? "Arrive home" : (d.street || "unnamed path");
+  const turn = d.kind === "arrive_home" ? "" : d.first_corner ? `head ${d.direction}` : d.direction;
+  $("dirline").textContent = [turn, d.block_length_m ? `${d.block_length_m} m to next corner` : "",
+                              d.override ? "OVERRIDE" : ""].filter(Boolean).join(" · ");
+  $("pbig").textContent = pct(d.top_p);
+  $("pconf").innerHTML = (d.confidence != null ? `conf ${d.confidence.toFixed(2)}<br>` : "") + `${Math.round(d.latency_ms)} ms`;
+  // Fewer pixels for the arrow when there are more bars, so the buttons stay on screen.
+  const n = d.options.length;
+  $("arrowWrap").style.setProperty("--a", `${n <= 3 ? 32 : n === 4 ? 25 : n === 5 ? 21 : n === 6 ? 17 : 14}vh`);
+  const bars = $("bars");
+  bars.innerHTML = "";
+  for (const o of [...d.options].sort((a, b) => b.p - a.p)) {
+    const row = document.createElement("div");
+    row.className = "bar" + (o.chosen ? " chosen" : "") + (o.taken && !o.chosen ? " taken" : "");
+    const walked = o.already_walked ? ' <span class="walked">↺</span>' : "";
+    row.innerHTML = `<div class="lbl"><div class="fill" style="width:${Math.max(2, o.p * 100)}%"></div>` +
+                    `<div class="txt">${escapeHtml(o.label)}${walked}</div></div><div class="pc">${pct(o.p)}</div>`;
+    bars.appendChild(row);
+  }
+}
+
+function renderWalk(v) {
+  const w = v.walk;
+  const mid = !!w && Date.now() - decisionAt > 15000 && w.progress_m > 25;
+  document.body.classList.toggle("midblock", mid);
+  $("walkline").classList.toggle("hidden", !mid);
+  if (mid) $("walkline").textContent = w.to_corner_m != null ? `next corner ${w.to_corner_m} m` : "walking";
+  $("here").disabled = v.phase !== "walking";
+  $("cant").disabled = v.phase !== "walking" || !v.decision || v.decision.kind !== "exit";
+}
+
+function renderHud(v) {
+  const h = v.hud;
+  $("miles").innerHTML = `${(h.walked_m / MILE).toFixed(2)} <small>/ ${(h.target_m / MILE).toFixed(1)} mi</small>`;
+  const cents = (h.cost_usd * 100).toFixed(3);
+  $("sub").textContent = `#${h.calls} · ${cents}¢` + (h.repeats ? ` · ${plural(h.repeats, "repeat")}` : "") +
+                         (h.overrides ? ` · ${plural(h.overrides, "override")}` : "");
+  const needle = $("needle");
+  if (v.mode === "pure") {
+    needle.style.opacity = .25; $("homeDist").textContent = "pure mode";
+  } else if (h.home_rel_deg == null) {
+    needle.style.opacity = .25; $("homeDist").textContent = "home";
+  } else {
+    needle.style.opacity = 1;
+    let rot = h.home_rel_deg;
+    $("needleN").classList.add("hidden");
+    if (h.home_abs) {        // no heading yet: absolute bearing
+      if (deviceHeading !== null) rot = h.home_rel_deg - deviceHeading;
+      else $("needleN").classList.remove("hidden");
+    }
+    needle.style.transform = `rotate(${rot}deg)`;
+    $("homeDist").textContent = h.home_m >= 1000 ? `${(h.home_m / 1000).toFixed(2)} km` : `${h.home_m} m`;
+  }
+}
+
+function renderEnded(v) {
+  showPanel("ended");
+  document.body.classList.remove("midblock");
+  const r = v.end.reason, s = v.end.score;
+  $("endTitle").textContent = r === "home" ? (s.clean_finish ? "Home. Clean finish." : "Home.") :
+    r === "distance_cap" ? "Stopped at 6.5 mi" : r === "time_cap" ? "Out of time" : "Walk ended";
+  $("score").innerHTML = [
+    `${s.distance_mi.toFixed(2)} mi (${s.distance_error_mi >= 0 ? "+" : ""}${s.distance_error_mi.toFixed(2)})`,
+    `${s.decisions} decisions · ${s.unique_streets} streets`,
+    `${plural(s.repeated_segments, "repeat")} · ${plural(s.overrides, "override")}`,
+    `mean top p ${s.mean_top_probability ?? "–"} · ${s.low_confidence_corners} under 40%`,
+    `${fmtTime(s.elapsed_min * 60)} · ${(s.total_cost_usd * 100).toFixed(3)}¢ · ${s.median_latency_ms} ms median`,
+  ].join("<br>");
+  $("logLink").href = `/api/log?token=${encodeURIComponent(TOKEN)}`;
+}
+
+function arrivalFlash() {
+  const f = $("flash");
+  f.classList.remove("go"); void f.offsetWidth; f.classList.add("go");
+  if (navigator.vibrate) navigator.vibrate([250, 100, 250]);
+}
+
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+// Elapsed clock ticks locally between server updates; poll when GPS is quiet.
+setInterval(() => {
+  if (!view || !view.hud) return;
+  const live = view.phase === "walking" || view.phase === "chooser_error";
+  $("elapsed").textContent = fmtTime(view.hud.elapsed_s + (live ? (Date.now() - viewAt) / 1000 : 0));
+  if (live) renderWalk(view);
+}, 500);
+setInterval(() => { if (view && view.phase === "walking" && Date.now() - viewAt > 5000 && !inflight) call("/api/view"); }, 5000);
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+startGps();
+call("/api/view");   // pick up a walk already in progress (page reload)
+</script>
+</body>
+</html>

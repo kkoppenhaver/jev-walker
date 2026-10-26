@@ -89,7 +89,8 @@ class Run:
             "started_at": time.time(),
             "clock_offset_s": 0.0 if sim else None,
         }
-        self.ui_events.append({"t": 0.0, "type": "start"})
+        if sim:
+            self.ui_events.append({"t": 0.0, "type": "start"})
 
     # ---------------------------------------------------------------- corner
 
@@ -139,20 +140,21 @@ class Run:
             self.ui_events.append({"t": self.s.elapsed_s, "type": "chooser_error", "error": str(e)})
             return {}
         latency_s = choice.latency_ms / 1000
-        rec = self._record(t_arrived, state, options, dropped, choice, latency_s)
+        times = {"t_arrived": t_arrived, "t_menu_built": t_arrived,
+                 "t_jev_sent": t_arrived, "t_jev_returned": t_arrived + latency_s}
+        rec = self.record(state, options, dropped, choice, times)
         self.s.elapsed_s += latency_s
         self.apply(rec, choice.choice)
         return rec
 
-    def _record(self, t_arrived, state, options, dropped, choice: Choice, latency_s) -> dict:
+    def record(self, state, options, dropped, choice: Choice, times: dict) -> dict:
+        """Log one decision. `times` holds t_arrived, t_menu_built, t_jev_sent and
+        t_jev_returned in seconds since the start."""
         rec = {
             "i": len(self.decisions),
             "node": self.s.node,
             "lonlat": list(self.here),
-            "t_arrived": round(t_arrived, 3),
-            "t_menu_built": round(t_arrived, 3),
-            "t_jev_sent": round(t_arrived, 3),
-            "t_jev_returned": round(t_arrived + latency_s, 3),
+            **{k: round(v, 3) for k, v in times.items()},
             "state": state,
             "menu": [o.harness() for o in options],
             "dropped": dropped,
@@ -194,7 +196,8 @@ class Run:
 
     def apply(self, rec: dict, chosen_id: str, override: dict | None = None) -> None:
         """Walk the chosen exit (or the overridden one). In the simulator the walker
-        arrives instantly; time advances by block length / walking speed."""
+        arrives instantly and time advances by block length / walking speed; on a
+        live walk the caller sets s.elapsed_s from the real clock instead."""
         s, cfg = self.s, self.cfg
         if override:
             rec["override"] = override
@@ -204,7 +207,8 @@ class Run:
             if s.node != self.home.node:
                 finish = nx.shortest_path_length(self.G, s.node, self.home.node, weight="length")
                 s.walked_m += finish
-                s.elapsed_s += finish / cfg.walk_speed_mps
+                if self.sim:
+                    s.elapsed_s += finish / cfg.walk_speed_mps
             rec["finish_on_foot_m"] = round(finish, 1)
             s.node, s.ended = self.home.node, "home"
             self.ui_events.append({"t": s.elapsed_s, "type": "run_end", "reason": "home"})
@@ -219,7 +223,8 @@ class Run:
             s.walk_counts[e] += 1
         s.repeats += repeat_hops
         s.walked_m += trav.length_m
-        s.elapsed_s += trav.length_m / cfg.walk_speed_mps + cfg.corner_dwell_s
+        if self.sim:
+            s.elapsed_s += trav.length_m / cfg.walk_speed_mps + cfg.corner_dwell_s
         s.last_turns.append(opt.direction)
         self.path.append({
             "decision": rec["i"], "from": s.node, "to": trav.end,
