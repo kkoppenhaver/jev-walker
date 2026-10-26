@@ -35,14 +35,33 @@ from .geo import LocalProjection, haversine_m
 log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_GRAPH_PATH = ROOT / "data" / "buena_park_walk.graphml"
 DEFAULT_HOME_PATH = ROOT / "config" / "home.json"
 LOCAL_HOME_PATH = ROOT / "config" / "home.local.json"
 
-# The spec's area is Irving Park (south) to Foster (north), the lake (east) to Clark
-# (west). The fetch runs Belmont to Bryn Mawr and out to Damen so a wandering walker
-# does not hit the edge of the map, where truncated streets look like dead ends.
-BBOX = (-87.6800, 41.9390, -87.6280, 41.9840)  # (west, south, east, north)
+
+@dataclass(frozen=True)
+class Area:
+    bbox: tuple[float, float, float, float]  # (west, south, east, north)
+    graph_file: str
+
+    @property
+    def graph_path(self) -> Path:
+        return ROOT / "data" / self.graph_file
+
+
+AREAS = {
+    # The spec's area is Irving Park (south) to Foster (north), the lake (east) to
+    # Clark (west). The fetch runs Belmont to Bryn Mawr and out to Damen so a
+    # wandering walker does not hit the edge of the map, where truncated streets
+    # look like dead ends.
+    "buena_park": Area((-87.6800, 41.9390, -87.6280, 41.9840), "buena_park_walk.graphml.gz"),
+    # San Francisco, coast to bay, Fisherman's Wharf to the county line, so any
+    # door in the city has the full 2-3 km of loop radius around it.
+    "sf": Area((-122.5160, 37.7070, -122.3550, 37.8120), "sf_walk.graphml.gz"),
+}
+DEFAULT_AREA = "buena_park"
+DEFAULT_GRAPH_PATH = AREAS[DEFAULT_AREA].graph_path
+BBOX = AREAS[DEFAULT_AREA].bbox
 
 KEEP_HIGHWAYS = (
     "residential", "tertiary", "secondary", "primary", "unclassified",
@@ -61,6 +80,7 @@ OVERPASS_FILTER = (
 STUB_PRUNE_M = 40.0        # dead-end footway/path stubs shorter than this are dropped
 CONSOLIDATE_M = 8.0        # nodes closer than this (radius) are merged into one corner
 CONTRACT_M = 25.0          # corners joined by a shorter edge count as one intersection
+PARALLEL_M = 30.0          # parallel edges between the same corners this close are one street
 HOME_NODE = -1             # node id for the inserted front door
 SNAP_TO_NODE_M = 12.0      # door this close to an existing node just uses that node
 
@@ -95,9 +115,34 @@ def build_graph(out_path: Path = DEFAULT_GRAPH_PATH, bbox=BBOX) -> nx.MultiDiGra
     G = ox.project_graph(Gp, to_latlong=True)
     log.info("final: %d nodes, %d edges", len(G), G.number_of_edges())
 
+    G = slim_for_cache(G)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ox.save_graphml(G, out_path)
     return G
+
+
+def slim_for_cache(G: nx.MultiDiGraph) -> nx.MultiDiGraph:
+    """Keep only what load_graph reads (one direction per edge; length, name,
+    highway, geometry rounded to ~1 cm) so a whole city fits in a small file."""
+    from shapely.geometry import LineString as LS
+
+    out = nx.MultiDiGraph()
+    out.graph.update({k: v for k, v in G.graph.items() if k in ("crs", "created_date", "created_with")})
+    for n, d in G.nodes(data=True):
+        out.add_node(n, x=round(float(d["x"]), 7), y=round(float(d["y"]), 7))
+    seen = set()
+    for u, v, k, d in G.edges(keys=True, data=True):
+        sig = (min(u, v), max(u, v), round(float(d["length"]), 1))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        attrs = {"length": round(float(d["length"]), 2), "highway": d.get("highway", "")}
+        if d.get("name") is not None:
+            attrs["name"] = d["name"]
+        if d.get("geometry") is not None:
+            attrs["geometry"] = LS([(round(x, 7), round(y, 7)) for x, y in d["geometry"].coords])
+        out.add_edge(u, v, **attrs)
+    return out
 
 
 def _prune_and_merge(G: nx.MultiGraph) -> None:
@@ -169,6 +214,34 @@ def _contract_short_edges(G: nx.MultiGraph, max_len: float = CONTRACT_M) -> None
         G.remove_nodes_from(cluster)
 
 
+_HIGHWAY_RANK = {h: 0 for h in STREET_HIGHWAYS} | {
+    "pedestrian": 1, "footway": 2, "path": 2, "steps": 3, "cycleway": 4}
+
+
+def _merge_parallel_edges(G: nx.MultiGraph, max_gap: float = PARALLEL_M) -> int:
+    """Two edges between the same pair of corners that run side by side are one
+    street to a walker: the two carriageways of a divided road, or a bike lane
+    mapped separately from its street (SF does both a lot). Keep the street."""
+    removed = 0
+    pairs = {(min(u, v), max(u, v)) for u, v, k in G.edges(keys=True)
+             if u != v and G.number_of_edges(u, v) > 1}
+    for u, v in pairs:
+        proj = LocalProjection(G.nodes[u]["x"], G.nodes[u]["y"])
+        edges = sorted(G[u][v].items(), key=lambda kd: (
+            _HIGHWAY_RANK.get(kd[1]["highway"], 5), not kd[1]["name"], kd[1]["length"]))
+        lines = {k: LineString([proj.to_xy(*c) for c in edge_coords(G, u, v, k)]) for k, _ in edges}
+        kept: list = []
+        for k, d in edges:
+            twin = any(abs(d["length"] - G[u][v][j]["length"]) <= max(max_gap, 0.2 * d["length"])
+                       and lines[k].hausdorff_distance(lines[j]) <= max_gap for j in kept)
+            if twin:
+                G.remove_edge(u, v, k)
+                removed += 1
+            else:
+                kept.append(k)
+    return removed
+
+
 def _highways(data) -> set[str]:
     h = data.get("highway")
     if isinstance(h, list):
@@ -189,24 +262,32 @@ class Home:
 
 
 def graph_hash(path: Path = DEFAULT_GRAPH_PATH) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:12]
+    """Hash of the graph content (decompressed, so re-gzipping doesn't change it)."""
+    import gzip
+
+    path = Path(path)
+    data = gzip.decompress(path.read_bytes()) if path.suffix == ".gz" else path.read_bytes()
+    return hashlib.sha256(data).hexdigest()[:12]
 
 
-def load_home_config() -> dict:
-    """Front door coordinates. config/home.local.json (gitignored) wins over the
-    checked-in placeholder; JEV_HOME="lat,lon" wins over both."""
+def load_home_config(area: str = DEFAULT_AREA) -> dict:
+    """Front door coordinates for `area`. config/home.local.json (gitignored) wins
+    over the checked-in placeholders in config/home.json; JEV_HOME="lat,lon" wins
+    over both. Both files are keyed by area name."""
     env = os.environ.get("JEV_HOME")
     if env:
         lat, lon = (float(s) for s in env.split(","))
         return {"lat": lat, "lon": lon, "source": "env"}
-    path = LOCAL_HOME_PATH if LOCAL_HOME_PATH.exists() else DEFAULT_HOME_PATH
-    cfg = json.loads(path.read_text())
-    cfg["source"] = path.name
-    return cfg
+    for path in (LOCAL_HOME_PATH, DEFAULT_HOME_PATH):
+        if path.exists():
+            cfg = json.loads(path.read_text())
+            if area in cfg:
+                return {**cfg[area], "source": f"{path.name}:{area}"}
+    raise KeyError(f"no front door for area {area!r} in {LOCAL_HOME_PATH.name} or {DEFAULT_HOME_PATH.name}")
 
 
-def load_graph(path: Path = DEFAULT_GRAPH_PATH, home: dict | None = None,
-               paths: str = "all") -> tuple[nx.MultiGraph, Home]:
+def load_graph(path: Path | None = None, home: dict | None = None,
+               paths: str = "all", area: str = DEFAULT_AREA) -> tuple[nx.MultiGraph, Home]:
     """Load the cached graph as an undirected MultiGraph with the door inserted.
 
     paths="named" drops unnamed footways/paths (park path tangles around Montrose
@@ -215,6 +296,7 @@ def load_graph(path: Path = DEFAULT_GRAPH_PATH, home: dict | None = None,
     """
     import osmnx as ox
 
+    path = Path(path) if path else AREAS[area].graph_path
     D = ox.load_graphml(path)
     G = nx.MultiGraph()
     G.graph.update(D.graph)
@@ -244,8 +326,11 @@ def load_graph(path: Path = DEFAULT_GRAPH_PATH, home: dict | None = None,
     _prune_and_merge(G)
     _contract_short_edges(G)
     _prune_and_merge(G)
+    _merge_parallel_edges(G)
+    _prune_and_merge(G)
     _break_self_loops(G)
-    home_cfg = home or load_home_config()
+    G.graph["area"] = area
+    home_cfg = home or load_home_config(area)
     H = insert_home(G, home_cfg["lon"], home_cfg["lat"])
     return G, H
 
@@ -372,7 +457,13 @@ def is_decision_point(G: nx.MultiGraph, n) -> bool:
 
 
 if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Fetch and cache the walk graph for an area.")
+    ap.add_argument("--area", default=DEFAULT_AREA, choices=sorted(AREAS))
+    args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    G = build_graph()
-    print(f"wrote {DEFAULT_GRAPH_PATH} ({len(G)} nodes, {G.number_of_edges()} edges), "
-          f"hash {graph_hash()}")
+    a = AREAS[args.area]
+    G = build_graph(a.graph_path, a.bbox)
+    print(f"wrote {a.graph_path} ({len(G)} nodes, {G.number_of_edges()} edges), "
+          f"hash {graph_hash(a.graph_path)}")

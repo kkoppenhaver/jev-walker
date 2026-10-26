@@ -1,5 +1,5 @@
 {
-  "_comment": "Placeholder front door in Buena Park. Put the real door in config/home.local.json (gitignored) or JEV_HOME=lat,lon.",
-  "lat": 41.95858,
-  "lon": -87.65232
+  "_comment": "Placeholder front doors, mid-block on public streets. Put real ones in config/home.local.json (gitignored, same shape) or set JEV_HOME=lat,lon.",
+  "buena_park": {"lat": 41.95858, "lon": -87.65232, "where": "W Buena Ave between Broadway and Hazel"},
+  "sf": {"lat": 37.75870, "lon": -122.41700, "where": "20th St in the Mission"}
 }

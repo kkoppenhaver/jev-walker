@@ -19,6 +19,8 @@ from .graph import edge_coords, is_decision_point
 
 MAX_OPTIONS = 6
 BEARING_SAMPLE_M = 20.0  # look this far along an edge to get its initial bearing
+TWIN_ANGLE = 20.0        # same-street exits closer than this in angle...
+TWIN_END_M = 60.0        # ...whose next corners are this close are one street
 ARRIVE_HOME = "arrive_home"
 OPTION_IDS = "ABCDEF"
 
@@ -38,6 +40,9 @@ class Traversal:
     hops: list[tuple[int, int, int]]  # directed (u, v, k) in walking order
     length_m: float
     coords: list[tuple[float, float]]
+    # The other carriageway of a divided road (or a parallel bike lane) that leaves
+    # this corner alongside this one. Walking either counts as walking both.
+    twin_edges: list = field(default_factory=list)
 
     @property
     def edge_ids(self) -> list[EdgeId]:
@@ -88,6 +93,8 @@ class Option:
             t = self.traversal
             d["to_node"] = t.end
             d["edges"] = [list(e) for e in t.edge_ids]
+            if t.twin_edges:
+                d["twin_edges"] = [list(e) for e in t.twin_edges]
             d["coords"] = [[round(x, 7), round(y, 7)] for x, y in t.coords]
         return d
 
@@ -173,7 +180,7 @@ def build_menu(
             back=back, traversal=trav,
         ))
 
-    dropped: list[dict] = []
+    options, dropped = _merge_twins(G, options)
     if len(options) > MAX_OPTIONS:
         # Keep the six closest to the cardinal directions (relative to heading, or
         # to north on the first corner) and log the rest.
@@ -181,7 +188,7 @@ def build_menu(
             return abs(wrap180(o.angle_deg - 90 * round(o.angle_deg / 90)))
         ranked = sorted(options, key=off_cardinal)
         keep = ranked[:MAX_OPTIONS]
-        dropped = [o.harness() for o in ranked[MAX_OPTIONS:]]
+        dropped += [{**o.harness(), "dropped_for": "six_option_cap"} for o in ranked[MAX_OPTIONS:]]
         options = keep
 
     # Stable order: clockwise from straight ahead (or from north).
@@ -191,6 +198,32 @@ def build_menu(
     if offer_arrive_home:
         options.append(Option(id=ARRIVE_HOME, kind=ARRIVE_HOME))
     return options, dropped
+
+
+def _merge_twins(G, options: list[Option]) -> tuple[list[Option], list[dict]]:
+    """Fold divided-road carriageways that leave this corner side by side into one
+    exit. (Twins that rejoin at the same corner are already merged in the graph.)"""
+    kept: list[Option] = []
+    dropped: list[dict] = []
+    for o in sorted(options, key=lambda o: (not o.back, o.block_length_m)):
+        twin_of = None
+        for k in kept:
+            if (o.street and o.street == k.street
+                    and abs(wrap180(o.angle_deg - k.angle_deg)) < TWIN_ANGLE
+                    and _node_gap(G, o.traversal.end, k.traversal.end) < TWIN_END_M):
+                twin_of = k
+                break
+        if twin_of is None:
+            kept.append(o)
+            continue
+        twin_of.traversal.twin_edges += o.traversal.edge_ids + o.traversal.twin_edges
+        twin_of.already_walked = twin_of.already_walked or o.already_walked
+        dropped.append({**o.harness(), "dropped_for": f"twin_of_{twin_of.direction}"})
+    return kept, dropped
+
+
+def _node_gap(G, a, b) -> float:
+    return haversine_m(G.nodes[a]["x"], G.nodes[a]["y"], G.nodes[b]["x"], G.nodes[b]["y"])
 
 
 def build_state(

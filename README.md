@@ -4,8 +4,9 @@ Harness for the sidewalk-scale cannonball run: Jev picks an exit at every corner
 five-mile loop from the front door, seeing only the current corner plus a compass home.
 
 This covers build-plan steps 2 and 3 (graph + menu builder, simulator, scoring, JSON
-log), plus the chooser adapters for step 5. Still to build: the replay renderer, the
-phone page and its backend, and analysis.
+log) for two areas, Buena Park and San Francisco, plus the chooser adapters for step 5,
+including a Jev adapter written against TypeSafe's published API. Still to build: the
+replay renderer, the phone page and its backend, and analysis.
 
 ## Layout
 
@@ -17,8 +18,8 @@ phone page and its backend, and analysis.
 | `jev_walker/choosers.py` | `random`, `heuristic`, `claude`, `jev` |
 | `jev_walker/scoring.py` | Per-run scoring table |
 | `jev_walker/sim.py` | Run N loops, aggregate, keep a few full logs |
-| `data/buena_park_walk.graphml` | Cached street graph (no map calls on the walk) |
-| `config/home.json` | Placeholder door on W Buena Ave. Put the real one in `config/home.local.json` (gitignored) or `JEV_HOME=lat,lon` |
+| `data/<area>_walk.graphml.gz` | Cached street graphs, `buena_park` and `sf` (no map calls on the walk) |
+| `config/home.json` | Placeholder doors per area (W Buena Ave; 20th St in the Mission). Put real ones in `config/home.local.json` (gitignored, same shape) or set `JEV_HOME=lat,lon` |
 
 ## Running
 
@@ -30,14 +31,18 @@ python -m jev_walker.sim --chooser random --runs 1000
 python -m jev_walker.sim --chooser heuristic --runs 1000
 python -m jev_walker.sim --chooser heuristic --runs 200 --mode pure
 python -m jev_walker.sim --chooser claude --runs 20      # needs ANTHROPIC_API_KEY
-python -m jev_walker.sim --chooser jev --runs 1000       # needs JEV_API_URL / JEV_API_KEY
+python -m jev_walker.sim --chooser jev --runs 1000       # needs TYPESAFE_API_KEY or OPENROUTER_API_KEY
 
-# Rebuild the graph cache (about 2 min; overpass-api.de is often saturated)
-OVERPASS_URL=https://maps.mail.ru/osm/tools/overpass/api python -m jev_walker.graph
+# San Francisco
+python -m jev_walker.sim --area sf --chooser heuristic --runs 1000
+python -m jev_walker.sim --area sf --chooser heuristic --runs 1000 --walk-speed 1.1 --time-cap 180
+
+# Rebuild a graph cache (Buena Park ~2 min, SF ~5 min; overpass-api.de is often saturated)
+OVERPASS_URL=https://maps.mail.ru/osm/tools/overpass/api python -m jev_walker.graph --area sf
 ```
 
-The sim writes `runs/<stamp>-<chooser>-<mode>/` with `summary.json`, a `runs.jsonl`
-score line per run, and the first `--keep-logs` full logs for the renderer.
+The sim writes `runs/<stamp>-<area>-<chooser>-<mode>/` with `summary.json`, a
+`runs.jsonl` score line per run, and the first `--keep-logs` full logs for the renderer.
 
 ## The contract as built
 
@@ -67,6 +72,8 @@ coordinates, node ids or geometry reach the public view.
   adds the walk to the door.
 - If a corner has more than 6 exits, the 6 nearest to straight, left, right and back
   are kept and the rest are logged under `dropped`.
+- The two carriageways of a divided road leaving a corner side by side are one exit
+  (`dropped_for: twin_of_...` in the log). Walking either one marks both as walked.
 
 ## Graph decisions (some differ from the spec)
 
@@ -83,26 +90,35 @@ coordinates, node ids or geometry reach the public view.
 - **The door is a node.** The nearest block is split at the door, so the loop starts
   and finishes exactly there. Coming home along the block you left on counts as a repeat.
 - **The fetch area is larger than the spec's.** It runs Belmont to Bryn Mawr and out
-  to Damen, so a walker heading north doesn't hit a fake dead end at Foster.
+  to Damen, so a walker heading north doesn't hit a fake dead end at Foster. SF is the
+  whole city, so any door gets a full loop radius.
+- **Divided roads and parallel bike lanes are one street.** Parallel edges between the
+  same two corners within 30 m of each other are merged, keeping the street over the
+  bike lane. Carriageways that end at different corners are folded at menu time. This
+  matters most in SF: Market St corners had up to 11 exits before; now the busiest
+  corner has 8, and 7 of 6,656 corners hit the six-exit cap.
+- **The cache stores only what the harness reads** (one direction per edge; length,
+  name, highway, geometry), gzipped. All of SF is 1.2 MB.
 - **Unnamed park paths are dropped by default (`--paths named`).** Named paths stay,
   including the Lakefront Trail and the access paths under Lake Shore Drive. This is
   the biggest call here, so it's a flag. The unnamed paths around Montrose Harbor are
   where walkers get stuck: with them in, the compass heuristic goes from 67% clean to
   0% (table below). Use `--paths all` to put them back.
 
-Corners spot-checked against the real graph in `tests/test_real_corners.py`:
-Montrose & Clarendon, Irving Park & Sheridan, Buena & Hazel (a T).
+Corners spot-checked against the real graphs in `tests/test_real_corners.py`:
+Montrose & Clarendon, Irving Park & Sheridan, Buena & Hazel (a T); in SF, Valencia &
+20th and Haight & Divisadero.
 
-## First simulation results
+## Simulation results: Buena Park
 
-1,000 runs each, placeholder door, compass mode unless noted, graph `dde19f66e26b`.
+1,000 runs each, placeholder door, compass mode unless noted, graph `38710436afd5`.
 
 | Chooser | Paths | Finish | Clean | Median closed loop (mi) | Mean repeats | Decisions |
 | --- | --- | --- | --- | --- | --- | --- |
-| random | named | 29.8% | 0% | 0.34 | 26.2 | 53 |
-| heuristic | named | 100% | 67.2% | 5.11 | 1.35 | 56 |
-| heuristic, pure mode (200 runs) | named | 0% | 0% | – | 0.08 | 76 |
-| heuristic | all | 39% | 0% | 5.82 | 8.0 | 55 |
+| random | named | 30% | 0% | 0.35 | 26.3 | 53 |
+| heuristic | named | 100% | 67.2% | 5.12 | 1.35 | 56 |
+| heuristic, pure mode (200 runs) | named | 0% | 0% | – | 0.08 | 77 |
+| heuristic | all | 75% | 0% | 5.93 | 6.8 | 55 |
 
 - **Random** finishes about 30% of the time, but almost always by stepping back to the
   door and taking `arrive_home` within a few blocks. That is what the rules allow.
@@ -113,21 +129,92 @@ Montrose & Clarendon, Irving Park & Sheridan, Buena & Hazel (a T).
 - **Pure mode** fails, as the spec predicts.
 - About 55 decisions per 5 miles, slightly under the spec's 60–90 estimate.
 
+## Simulation results: San Francisco
+
+Compass heuristic, 100 runs per door and turning side, `--paths named`, graph
+`e169eaa38274`. The doors are placeholders on public streets, snapped to the nearest
+block.
+
+| Door | Finish (side +1 / −1) | Clean (side +1 / −1) | Decisions |
+| --- | --- | --- | --- |
+| Mission (20th St) | 100% / 100% | 86% / 51% | 67–74 |
+| Noe Valley | 100% / 43% | 100% / 12% | 63–77 |
+| Bernal Heights | 100% / 100% | 0% / 0% | 74–78 |
+| Outer Sunset | 100% / 100% | 100% / 100% | 56–62 |
+| Inner Richmond | 100% / 100% | 24% / 67% | 58–59 |
+| Lower Haight | 100% / 100% | 100% / 100% | 71–74 |
+| Russian Hill | 100% / 100% | 56% / 44% | 68–71 |
+| Potrero Hill | 100% / 100% | 100% / 12% | 53–70 |
+| Glen Park | 100% / 100% | 64% / 26% | 63–83 |
+
+- The result depends a lot on the door and the first turn, so simulate from the real
+  door before the walk.
+- SF has more decisions per loop than Buena Park (55–85 vs about 55).
+- **Hills are not modelled.** Neither the state nor the sim knows elevation. At
+  1.34 m/s loops take 104–120 simulated minutes. At 1.1 m/s, roughly an SF hill pace,
+  they take 125–144 minutes, and the 150-minute cap ends some runs before they get home
+  (Bernal 14 of 50, Inner Richmond 25 of 50, Russian Hill 5 of 50). `--time-cap`
+  makes that rule easy to change.
+
 ## Chooser notes
 
 - `claude` asks `claude-opus-5-5` (`JEV_CLAUDE_MODEL`) at effort `low`
   (`JEV_CLAUDE_EFFORT`, chosen for sidewalk latency). It uses structured output for
   `{choice, probabilities}` and server-side refusal fallbacks. It has only been tested
   against a fake client; no live calls have been made yet.
-- `jev` is an assumed contract: POST `{state, options}`, expect
-  `{choice, probabilities, cost_usd?}`. It is the only code that changes once Jev's
-  docs settle the open questions. A response with no probability vector is accepted
-  and flagged in the log, since the calibration chart needs the full vector.
+- `jev` calls TypeSafe's Jev decision model. Each corner is one request with one
+  `choice` question:
+
+  ```json
+  {"model": "jev-latest",
+   "state": { ...the state object above... },
+   "questions": {"exit": {"type": "choice", "instructions": { ...the game, goals, field meanings... },
+     "criteria": {"A": {"summary": "right (+87 deg) onto N Clarendon Ave, 190 m to the next corner",
+                        "direction": "right", "angle_deg": 87, "street": "N Clarendon Ave", ...},
+                  "arrive_home": {"summary": "Stop here. ..."}}}}}
+  ```
+
+  The response gives `answers.exit.choice`, `probabilities` for every option, and
+  `confidence`. The log records the served snapshot (e.g. `jev-1.13.0`), the
+  confidence, and `usage.cost`. When there is no cost, it estimates $0.042 per million
+  input tokens.
+  - `TYPESAFE_API_KEY` → `https://api.typesafe.ai/v1/systemone`, model `jev-latest`.
+  - `OPENROUTER_API_KEY` → `https://openrouter.ai/api/alpha/decisions`, model
+    `typesafe/jev-1.14`.
+  - `JEV_PROVIDER`, `JEV_API_URL`, `JEV_MODEL` and `JEV_API_KEY` override these.
+  - 429 and 5xx responses get one retry.
+  - Tested against fakes and a local HTTP server, not the live API (no key in this
+    environment).
+
+### The spec's open questions, answered from the docs
+
+| Question | Answer |
+| --- | --- |
+| Free-form JSON state or registered schema? | Free-form: `state` is any string, object or array. Nothing to register |
+| Options typed with attributes? | Yes. Choice `criteria` values may be strings, objects or arrays, so each exit carries its attributes |
+| Option cap? | 255 per Choice. Our cap of 6 is our own |
+| Probability for every option? | Yes. `probabilities` covers every option and sums to 1, plus a `confidence` statistic, (p_max − 1/n)/(1 − 1/n) |
+| Latency over LTE? | Not documented by TypeSafe. AIML API's docs say "well under a second" (one example: 96 ms). The backend makes the call, not the phone. Measure it |
+| State across calls? | None. Each request carries everything; OpenRouter's `session_id` is observability only. `last_turns` stays |
+
+Two notes from the docs:
+- Jev never sees the question id, so everything it needs is in `instructions` and
+  `criteria`.
+- TypeSafe recommends atomic questions combined in code. A later variant could ask
+  separate yes/no questions per exit ("keeps the loop closable?", "new street?")
+  instead of one forced choice. That is not the spec's test, though.
+
+Sources: [TypeSafe docs](https://docs.typesafe.ai) ([quickstart](https://docs.typesafe.ai/introduction/quickstart.md),
+[Choice](https://docs.typesafe.ai/primitives/choice.md), [confidence](https://docs.typesafe.ai/confidence.md)),
+[OpenRouter Jev tutorial](https://openrouter.ai/docs/guides/community/jev-tutorial.md),
+[OpenRouter Decisions API reference](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-questions-and-answers-request.md),
+[AIML API Jev page](https://docs.aimlapi.com/api-references/decision-models/typesafe/jev.md).
 
 ## Log format (v1)
 
 `header` (run id, mode, chooser, model version, home node, graph hash, config),
 `decisions` (state, menu with geometry, choice, probabilities, latency, cost, override,
+served model and confidence when the chooser reports them,
 and in sims an `oracle` block with each option's true shortest-path distance home and
 whether the loop is still closable within 5.5 mi, for the calibration chart), `path`
 (one entry per block walked, with geometry and repeat count), `ui_events`, `gps` (empty

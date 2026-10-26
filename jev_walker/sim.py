@@ -3,6 +3,7 @@
     python -m jev_walker.sim --chooser random --runs 1000
     python -m jev_walker.sim --chooser heuristic --runs 1000 --mode pure
     python -m jev_walker.sim --chooser claude --runs 20 --keep-logs 20
+    python -m jev_walker.sim --area sf --chooser heuristic --runs 1000 --walk-speed 1.2
 
 Writes runs/<stamp>-<chooser>-<mode>/ with summary.json (aggregate), runs.jsonl
 (one score line per run) and the first --keep-logs full run logs for the renderer.
@@ -19,7 +20,7 @@ import time
 from pathlib import Path
 
 from .choosers import make_chooser
-from .graph import ROOT, load_graph
+from .graph import AREAS, DEFAULT_AREA, ROOT, load_graph
 from .run import MILE_M, Run, RunConfig, dist_to_home
 
 
@@ -63,6 +64,7 @@ def summarise(scores: list[dict], logs_repeat_nodes: collections.Counter, G) -> 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--area", default=DEFAULT_AREA, choices=sorted(AREAS))
     ap.add_argument("--chooser", default="random", choices=["random", "heuristic", "claude", "jev"])
     ap.add_argument("--runs", type=int, default=1000)
     ap.add_argument("--mode", default="compass", choices=["compass", "pure"])
@@ -70,16 +72,21 @@ def main(argv=None) -> int:
                     help="named: drop unnamed park paths (default); all: keep every footway")
     ap.add_argument("--arrive-radius", type=float, default=25.0,
                     help="offer arrive_home within this many metres of the door")
+    ap.add_argument("--walk-speed", type=float, default=RunConfig.walk_speed_mps,
+                    help="metres per second for the simulated clock (SF hills: try 1.2)")
+    ap.add_argument("--time-cap", type=float, default=RunConfig.time_cap_min,
+                    help="minutes before the run is cut off (spec: 150)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--keep-logs", type=int, default=10, help="full logs to keep for the renderer")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args(argv)
 
-    G, home = load_graph(paths=args.paths)
+    G, home = load_graph(paths=args.paths, area=args.area)
     dist_home = dist_to_home(G, home)
-    cfg = RunConfig(mode=args.mode, arrive_home_radius_m=args.arrive_radius)
+    cfg = RunConfig(mode=args.mode, arrive_home_radius_m=args.arrive_radius,
+                    walk_speed_mps=args.walk_speed, time_cap_min=args.time_cap)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    out = args.out or ROOT / "runs" / f"{stamp}-{args.chooser}-{args.mode}"
+    out = args.out or ROOT / "runs" / f"{stamp}-{args.area}-{args.chooser}-{args.mode}"
     out.mkdir(parents=True, exist_ok=True)
 
     scores, hotspots = [], collections.Counter()
@@ -91,6 +98,7 @@ def main(argv=None) -> int:
             run = Run(G, home, chooser, cfg, run_id=f"{stamp}-{i:04d}", dist_home=dist_home, seed=seed)
             log = run.run_to_end()
             log["header"]["paths"] = args.paths
+            log["header"]["area"] = args.area
             s = log["score"]
             scores.append(s)
             for p in log["path"]:
@@ -103,7 +111,7 @@ def main(argv=None) -> int:
                 print(f"  {i + 1}/{args.runs} runs, {time.time() - t0:.0f}s", file=sys.stderr)
 
     summary = {
-        "chooser": args.chooser, "mode": args.mode, "paths": args.paths,
+        "area": args.area, "chooser": args.chooser, "mode": args.mode, "paths": args.paths,
         "graph_hash": G.graph["graph_hash"], "home_node": home.node,
         "target_mi": round(cfg.target_m / MILE_M, 2),
         **summarise(scores, hotspots, G),

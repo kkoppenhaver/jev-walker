@@ -3,7 +3,7 @@
 import pytest
 
 from jev_walker.geo import bearing_deg
-from jev_walker.graph import DEFAULT_GRAPH_PATH, load_graph
+from jev_walker.graph import AREAS, DEFAULT_GRAPH_PATH, load_graph
 from jev_walker.menu import build_menu, exit_bearing
 
 pytestmark = pytest.mark.skipif(not DEFAULT_GRAPH_PATH.exists(), reason="graph cache not built")
@@ -12,6 +12,14 @@ pytestmark = pytest.mark.skipif(not DEFAULT_GRAPH_PATH.exists(), reason="graph c
 @pytest.fixture(scope="module")
 def G():
     G, _ = load_graph(paths="all")
+    return G
+
+
+@pytest.fixture(scope="module")
+def SF():
+    if not AREAS["sf"].graph_path.exists():
+        pytest.skip("SF graph cache not built")
+    G, _ = load_graph(paths="named", area="sf")
     return G
 
 
@@ -63,3 +71,15 @@ def test_buena_and_hazel_t_junction(G):
     d = {o.direction: o for o in opts}
     assert set(d) == {"straight", "left", "back"}
     assert d["left"].street == "N Hazel St" and d["straight"].street == "W Buena Ave"
+
+
+def test_sf_valencia_and_20th(SF):
+    n = corner(SF, "Valencia St", "20th St")
+    check_four_way(SF, n, "Valencia St", "20th St", heading=0)
+    check_four_way(SF, n, "20th St", "Valencia St", heading=90)
+
+
+def test_sf_haight_and_divisadero(SF):
+    n = corner(SF, "Haight St", "Divisadero St")
+    check_four_way(SF, n, "Divisadero St", "Haight St", heading=0)
+    check_four_way(SF, n, "Haight St", "Divisadero St", heading=270)

@@ -156,6 +156,10 @@ class Run:
         }
         if choice.note:
             rec["note"] = choice.note
+        if choice.model:
+            rec["model"] = choice.model
+        if choice.confidence is not None:
+            rec["confidence"] = choice.confidence
         if self.dist_home is not None:
             rec["oracle"] = self._oracle(options)
         self.decisions.append(rec)
@@ -200,10 +204,10 @@ class Run:
 
         opt = self._options[chosen_id]
         trav = opt.traversal
-        repeat_hops = 0
-        for e in trav.edge_ids:
-            if s.walk_counts[e] > 0:
-                repeat_hops += 1
+        repeat_hops = sum(1 for e in trav.edge_ids if s.walk_counts[e] > 0)
+        if not repeat_hops and any(s.walk_counts[e] > 0 for e in trav.twin_edges):
+            repeat_hops = 1  # same street, other carriageway
+        for e in trav.edge_ids + trav.twin_edges:
             s.walk_counts[e] += 1
         s.repeats += repeat_hops
         s.walked_m += trav.length_m
