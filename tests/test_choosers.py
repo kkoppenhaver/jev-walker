@@ -1,6 +1,7 @@
 """Adapter plumbing, without network: fake Anthropic client, mock Jev transport."""
 
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -172,3 +173,42 @@ def test_jev_http_round_trip_with_retry(monkeypatch):
         srv.shutdown()
     assert c.choice == "A" and len(seen) == 2
     assert seen[1][0] == "Bearer ts-key" and seen[1][1]["questions"]["exit"]["type"] == "choice"
+
+
+def test_jev_post_retries_once_on_socket_reset(monkeypatch):
+    """A reset mid-read is an OSError, not a URLError: one retry, then ChooserError."""
+    import io
+    import urllib.request
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-key")
+    ch = JevChooser(provider="typesafe")
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    calls = []
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout):
+        calls.append(req)
+        if len(calls) == 1:
+            raise ConnectionResetError(104, "Connection reset by peer")
+        return Resp(b'{"ok": true}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    assert ch._post({"x": 1}) == {"ok": True}
+    assert len(calls) == 2
+
+    calls.clear()
+
+    def always_reset(req, timeout):
+        calls.append(req)
+        raise ConnectionResetError(104, "Connection reset by peer")
+
+    monkeypatch.setattr(urllib.request, "urlopen", always_reset)
+    with pytest.raises(ChooserError, match="reset"):
+        ch._post({"x": 1})
+    assert len(calls) == 2

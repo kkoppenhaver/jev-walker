@@ -368,7 +368,13 @@ class JevChooser(Chooser):
                     time.sleep(0.5)
                     continue
                 raise ChooserError(f"HTTP {e.code}: {detail}") from e
-            except (urllib.error.URLError, TimeoutError, ValueError) as e:
+            except (OSError, ValueError) as e:
+                # URLError, TimeoutError and a reset or dropped socket mid-read are all
+                # OSError. One retry: a single reset must not end a run, let alone a
+                # 1,000-loop sim.
+                if attempt == 0 and not isinstance(e, ValueError):
+                    time.sleep(0.5)
+                    continue
                 raise ChooserError(str(e)) from e
         raise AssertionError("unreachable")
 
