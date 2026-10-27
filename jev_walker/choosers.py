@@ -317,10 +317,17 @@ def jev_criteria(options: list[dict], state: dict | None = None) -> dict:
             continue
         attrs = {k: v for k, v in o.items() if k not in ("id", "kind")}
         where = f"onto {o['street']}" if o["street"] else "along an unnamed path"
-        flags = [f for f in ("already_walked", "dead_end", "back") if o.get(f)]
         summary = f"{o['direction']} ({o['angle_deg']:+d} deg) {where}, {o['block_length_m']} m to the next corner"
-        if flags:
-            summary += "; " + ", ".join(flags).replace("_", " ")
+        # Spell out what the flags cost. "back" and "already walked" as bare words lost
+        # to the compass every time: with home behind, the U-turn took p .6 to .8.
+        if o.get("back"):
+            summary += ("; a U-TURN back along the block just walked: a repeat (goal 3 "
+                        "broken), and it undoes the last block, so the loop makes no "
+                        "progress. Only if every other exit is worse.")
+        elif o.get("already_walked"):
+            summary += "; ALREADY WALKED: taking it is a repeat, goal 3 broken"
+        if o.get("dead_end"):
+            summary += "; DEAD END: the street stops at the next corner, forcing a U-turn there"
         out[o["id"]] = {"summary": summary, **attrs}
     return out
 

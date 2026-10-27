@@ -95,7 +95,7 @@ def test_jev_request_shape(monkeypatch):
     a = q["criteria"]["A"]
     assert a["street"] == "N Clarendon Ave" and a["block_length_m"] == 190 and "id" not in a
     assert a["summary"] == "right (+87 deg) onto N Clarendon Ave, 190 m to the next corner"
-    assert q["criteria"]["B"]["summary"].endswith("already walked, back")
+    assert "U-TURN" in q["criteria"]["B"]["summary"] and "repeat" in q["criteria"]["B"]["summary"]
     home = q["criteria"]["arrive_home"]
     assert home["summary"].startswith("Stop here and end the walk at 0.06 of 5.0 miles.")
     assert "FAILED" in home["summary"] and home["clean_finish"] is False
