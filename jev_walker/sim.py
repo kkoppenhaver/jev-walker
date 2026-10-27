@@ -4,6 +4,7 @@
     python -m jev_walker.sim --chooser heuristic --runs 1000 --mode pure
     python -m jev_walker.sim --chooser claude --runs 20 --keep-logs 20
     python -m jev_walker.sim --area sf --chooser heuristic --runs 1000 --walk-speed 1.2
+    python -m jev_walker.sim --area sf --chooser jev --runs 1000 --workers 16
 
 Writes runs/<stamp>-<chooser>-<mode>/ with summary.json (aggregate), runs.jsonl
 (one score line per run) and the first --keep-logs full run logs for the renderer.
@@ -17,6 +18,7 @@ import json
 import statistics
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .choosers import make_chooser
@@ -79,6 +81,8 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--keep-logs", type=int, default=10, help="full logs to keep for the renderer")
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--workers", type=int, default=1,
+                    help="loops to run at once; API choosers spend most of their time waiting (try 16)")
     args = ap.parse_args(argv)
 
     G, home = load_graph(paths=args.paths, area=args.area)
@@ -89,16 +93,22 @@ def main(argv=None) -> int:
     out = args.out or ROOT / "runs" / f"{stamp}-{args.area}-{args.chooser}-{args.mode}"
     out.mkdir(parents=True, exist_ok=True)
 
+    def one(i: int) -> tuple[int, int, dict]:
+        # Runs only read the graph, so they can share it across threads.
+        seed = args.seed + i
+        chooser = make_chooser(args.chooser, seed)
+        run = Run(G, home, chooser, cfg, run_id=f"{stamp}-{i:04d}", dist_home=dist_home, seed=seed)
+        log = run.run_to_end()
+        log["header"]["paths"] = args.paths
+        log["header"]["area"] = args.area
+        return i, seed, log
+
     scores, hotspots = [], collections.Counter()
     t0 = time.time()
-    with open(out / "runs.jsonl", "w") as jl:
-        for i in range(args.runs):
-            seed = args.seed + i
-            chooser = make_chooser(args.chooser, seed)
-            run = Run(G, home, chooser, cfg, run_id=f"{stamp}-{i:04d}", dist_home=dist_home, seed=seed)
-            log = run.run_to_end()
-            log["header"]["paths"] = args.paths
-            log["header"]["area"] = args.area
+    with open(out / "runs.jsonl", "w") as jl, ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+        futures = [pool.submit(one, i) for i in range(args.runs)]
+        for done, fut in enumerate(as_completed(futures), 1):
+            i, seed, log = fut.result()
             s = log["score"]
             scores.append(s)
             for p in log["path"]:
@@ -107,8 +117,8 @@ def main(argv=None) -> int:
             jl.write(json.dumps({"run_id": log["header"]["run_id"], "seed": seed, **s}) + "\n")
             if i < args.keep_logs:
                 (out / f"run-{i:04d}.json").write_text(json.dumps(log))
-            if (i + 1) % max(1, args.runs // 10) == 0:
-                print(f"  {i + 1}/{args.runs} runs, {time.time() - t0:.0f}s", file=sys.stderr)
+            if done % max(1, args.runs // 10) == 0:
+                print(f"  {done}/{args.runs} runs, {time.time() - t0:.0f}s", file=sys.stderr)
 
     summary = {
         "area": args.area, "chooser": args.chooser, "mode": args.mode, "paths": args.paths,
