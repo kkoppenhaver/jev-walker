@@ -91,6 +91,7 @@ def test_jev_request_shape(monkeypatch):
     assert req["model"] == "jev-latest" and req["state"] == STATE
     q = req["questions"]["exit"]
     assert q["type"] == "choice" and isinstance(q["instructions"], dict)
+    assert any("far point" in line for line in q["instructions"]["loop_shape"])
     assert list(q["criteria"]) == ["A", "B", "arrive_home"]
     a = q["criteria"]["A"]
     assert a["street"] == "N Clarendon Ave" and a["block_length_m"] == 190 and "id" not in a

@@ -258,6 +258,18 @@ JEV_INSTRUCTIONS = {
         "Never walk the same block twice: already_walked = true is a repeat.",
     ],
     "limits": "The walk is cut off at 6.5 miles or 150 minutes.",
+    "loop_shape": [
+        "A loop goes AWAY from home for the first half and comes back in the second. "
+        "Home being behind you early on is correct, not a problem to fix.",
+        "At its far point a 5.0 mile loop is about 1.2 miles (2,000 m) from the door. "
+        "Staying within a few blocks of the door and circling is how walks fail: the "
+        "blocks run out and the walker repeats them.",
+        "Rule of thumb: while remaining_m is more than 2 x home_distance_m, keep heading "
+        "away or sideways and let home_distance_m grow. Once remaining_m is under "
+        "1.5 x home_distance_m, favour exits that bring home toward dead ahead.",
+        "Prefer left and right turns that open new streets over going straight back "
+        "the way you came. Turn the same way (e.g. mostly left) to come round.",
+    ],
     "state_fields": {
         "home_distance_m": "straight-line distance to the door, not walking distance",
         "home_bearing_relative": (
