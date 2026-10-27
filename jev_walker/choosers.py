@@ -20,6 +20,8 @@ from dataclasses import dataclass
 
 from .geo import wrap180
 
+MILE_M = 1609.344
+
 
 class ChooserError(RuntimeError):
     pass
@@ -273,9 +275,26 @@ JEV_INSTRUCTIONS = {
     },
 }
 
-ARRIVE_HOME_CRITERION = {
-    "summary": "Stop here. The walker is at the front door; the walk ends now.",
-}
+def arrive_home_criterion(state: dict) -> dict:
+    """What stopping at the door costs right now. Jev weighs the criteria it is given;
+    a bare "the walk ends now" at 0.13 miles read as goal 1 achieved, so the summary
+    states the distance and whether it lands in the 4.5 to 5.5 mile window."""
+    walked, target = float(state.get("walked_m", 0)), float(state.get("target_m", 8047))
+    lo, hi = 0.9 * target, 1.1 * target
+    mi = walked / MILE_M
+    short = (lo - walked) / MILE_M
+    if walked < lo:
+        verdict = (f"That is {short:.1f} miles short of the 4.5 mile minimum: a FAILED walk. "
+                   f"Only stop here if the walker cannot keep going.")
+    elif walked <= hi:
+        verdict = "That is inside the 4.5 to 5.5 mile window: a clean finish. Stop."
+    else:
+        verdict = "That is past the 5.5 mile window; stop now before it gets worse."
+    return {
+        "summary": f"Stop here and end the walk at {mi:.2f} of 5.0 miles. {verdict}",
+        "walked_m": round(walked),
+        "clean_finish": lo <= walked <= hi,
+    }
 
 # OpenRouter lists Jev at $0.042 per million input tokens, output free. Used only when
 # the response carries no usage.cost (TypeSafe direct).
@@ -288,13 +307,13 @@ JEV_ENDPOINTS = {
 RETRY_STATUS = {429, 500, 502, 503, 524, 529}
 
 
-def jev_criteria(options: list[dict]) -> dict:
+def jev_criteria(options: list[dict], state: dict | None = None) -> dict:
     """One Choice criterion per option, keyed by option id. TypeSafe allows object
     descriptions, so each exit keeps its typed attributes, plus a one-line summary."""
     out = {}
     for o in options:
         if o["kind"] == "arrive_home":
-            out[o["id"]] = ARRIVE_HOME_CRITERION
+            out[o["id"]] = arrive_home_criterion(state or {})
             continue
         attrs = {k: v for k, v in o.items() if k not in ("id", "kind")}
         where = f"onto {o['street']}" if o["street"] else "along an unnamed path"
@@ -347,7 +366,7 @@ class JevChooser(Chooser):
             "questions": {self.QUESTION: {
                 "type": "choice",
                 "instructions": JEV_INSTRUCTIONS,
-                "criteria": jev_criteria(options),
+                "criteria": jev_criteria(options, state),
             }},
         }
 

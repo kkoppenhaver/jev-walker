@@ -96,7 +96,9 @@ def test_jev_request_shape(monkeypatch):
     assert a["street"] == "N Clarendon Ave" and a["block_length_m"] == 190 and "id" not in a
     assert a["summary"] == "right (+87 deg) onto N Clarendon Ave, 190 m to the next corner"
     assert q["criteria"]["B"]["summary"].endswith("already walked, back")
-    assert "front door" in q["criteria"]["arrive_home"]["summary"]
+    home = q["criteria"]["arrive_home"]
+    assert home["summary"].startswith("Stop here and end the walk at 0.06 of 5.0 miles.")
+    assert "FAILED" in home["summary"] and home["clean_finish"] is False
 
 
 def test_jev_parses_answer_and_cost(monkeypatch):
@@ -212,3 +214,17 @@ def test_jev_post_retries_once_on_socket_reset(monkeypatch):
     with pytest.raises(ChooserError, match="reset"):
         ch._post({"x": 1})
     assert len(calls) == 2
+
+
+def test_arrive_home_criterion_states_the_cost():
+    from jev_walker.choosers import arrive_home_criterion
+
+    short = arrive_home_criterion({"walked_m": 208, "target_m": 8047})
+    assert "0.13 of 5.0 miles" in short["summary"] and "4.4 miles short" in short["summary"]
+    assert short["clean_finish"] is False and short["walked_m"] == 208
+
+    clean = arrive_home_criterion({"walked_m": 7900, "target_m": 8047})
+    assert "clean finish" in clean["summary"] and clean["clean_finish"] is True
+
+    over = arrive_home_criterion({"walked_m": 9200, "target_m": 8047})
+    assert "past the 5.5 mile window" in over["summary"] and over["clean_finish"] is False
